@@ -26,12 +26,6 @@ export type AddAccountOptions = {
   allowMissingIdentity?: boolean;
 };
 
-export type RefreshAccountTokenResult = {
-  refreshed: boolean;
-  updatedCurrentAuth: boolean;
-  lastRefresh: string;
-};
-
 type AccountIdentity = {
   accountId: string | null;
   userId: string | null;
@@ -724,17 +718,6 @@ export async function updateAppConfig(config: Partial<AppConfig>): Promise<void>
   const store = await loadAccountsStore();
   store.config = { ...store.config, ...config };
   await saveAccountsStore(store);
-}
-
-export async function refreshAccountToken(
-  accountId: string,
-  config: AppConfig
-): Promise<RefreshAccountTokenResult> {
-  return invoke<RefreshAccountTokenResult>('refresh_account_token', {
-    accountId,
-    proxyEnabled: config.proxyEnabled,
-    proxyUrl: config.proxyUrl,
-  });
 }
 
 /**

@@ -1,4 +1,4 @@
-use chrono::{Local, SecondsFormat, TimeZone, Utc};
+use chrono::{Local, TimeZone};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -25,8 +25,6 @@ const TRAY_MENU_EXIT_ID: &str = "tray-exit";
 const MIN_VALID_EPOCH_MS: i64 = 946684800000; // 2000-01-01T00:00:00Z
 const MAX_VALID_EPOCH_MS: i64 = 4102444800000; // 2100-01-01T00:00:00Z
 const DEFAULT_LOGIN_TIMEOUT_SECONDS: u64 = 180;
-const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const CHATGPT_TOKEN_REFRESH_URL: &str = "https://auth.openai.com/oauth/token";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -1541,28 +1539,6 @@ struct AuthConfig {
     tokens: Option<AuthTokens>,
 }
 
-#[derive(Debug, Serialize)]
-struct TokenRefreshRequest {
-    client_id: &'static str,
-    grant_type: &'static str,
-    refresh_token: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TokenRefreshResponse {
-    id_token: Option<String>,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RefreshAccountTokenResult {
-    refreshed: bool,
-    updated_current_auth: bool,
-    last_refresh: String,
-}
-
 #[derive(Debug, Deserialize)]
 struct WhamAccountsCheckResponse {
     accounts: Vec<WhamAccountEntry>,
@@ -1611,19 +1587,9 @@ fn take_non_empty_token(value: Option<String>, missing_message: &str) -> Result<
     Ok(value)
 }
 
-fn get_active_stored_account_id() -> Result<String, String> {
-    let store = load_accounts_store_data()?;
-    store
-        .accounts
-        .iter()
-        .find(|account| account.is_active)
-        .map(|account| account.id.clone())
-        .ok_or_else(|| "No active account".to_string())
-}
-
-fn is_active_stored_account(account_id: &str) -> bool {
-    get_active_stored_account_id()
-        .map(|active_account_id| active_account_id == account_id)
+fn is_current_chatgpt_account(chatgpt_account_id: &str) -> bool {
+    get_current_auth_account_id()
+        .map(|current_account_id| current_account_id == chatgpt_account_id)
         .unwrap_or(false)
 }
 
@@ -1634,112 +1600,9 @@ fn extract_auth_credentials(auth_json: &str) -> Result<(String, String), String>
         .ok_or_else(|| "Missing tokens in auth.json".to_string())?;
 
     let access_token = take_non_empty_token(tokens.access_token, "Missing access token")?;
-    let chatgpt_account_id =
-        take_non_empty_token(tokens.account_id, "Missing ChatGPT account ID")?;
+    let chatgpt_account_id = take_non_empty_token(tokens.account_id, "Missing ChatGPT account ID")?;
 
     Ok((access_token, chatgpt_account_id))
-}
-
-fn extract_refresh_token(auth_json: &str) -> Result<String, String> {
-    let auth: AuthConfig = serde_json::from_str(auth_json).map_err(|e| e.to_string())?;
-    let tokens = auth
-        .tokens
-        .ok_or_else(|| "Missing tokens in auth.json".to_string())?;
-    take_non_empty_token(tokens.refresh_token, "Missing refresh token")
-}
-
-fn token_refresh_error_message(status: reqwest::StatusCode, body: &str) -> String {
-    let parsed_message = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| match error {
-                    serde_json::Value::Object(map) => map
-                        .get("message")
-                        .or_else(|| map.get("code"))
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string),
-                    serde_json::Value::String(message) => Some(message.clone()),
-                    _ => None,
-                })
-                .or_else(|| {
-                    value
-                        .get("message")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string)
-                })
-                .or_else(|| {
-                    value
-                        .get("code")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string)
-                })
-        });
-
-    match parsed_message {
-        Some(message) if !message.trim().is_empty() => {
-            format!("刷新登录令牌失败: {} {}", status, message)
-        }
-        _ => format!("刷新登录令牌失败: {}", status),
-    }
-}
-
-fn apply_refreshed_tokens(
-    auth_json: &str,
-    refresh_response: TokenRefreshResponse,
-) -> Result<(String, String), String> {
-    let mut auth_value: serde_json::Value =
-        serde_json::from_str(auth_json).map_err(|e| e.to_string())?;
-    let tokens = auth_value
-        .get_mut("tokens")
-        .and_then(serde_json::Value::as_object_mut)
-        .ok_or_else(|| "Missing tokens in auth.json".to_string())?;
-
-    let mut updated = false;
-    if let Some(id_token) = refresh_response
-        .id_token
-        .filter(|value| !value.trim().is_empty())
-    {
-        tokens.insert("id_token".to_string(), serde_json::Value::String(id_token));
-        updated = true;
-    }
-    if let Some(access_token) = refresh_response
-        .access_token
-        .filter(|value| !value.trim().is_empty())
-    {
-        tokens.insert(
-            "access_token".to_string(),
-            serde_json::Value::String(access_token),
-        );
-        updated = true;
-    }
-    if let Some(refresh_token) = refresh_response
-        .refresh_token
-        .filter(|value| !value.trim().is_empty())
-    {
-        tokens.insert(
-            "refresh_token".to_string(),
-            serde_json::Value::String(refresh_token),
-        );
-        updated = true;
-    }
-
-    if !updated {
-        return Err("刷新接口未返回新的 token".to_string());
-    }
-
-    let last_refresh = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    auth_value
-        .as_object_mut()
-        .ok_or_else(|| "Invalid auth.json format".to_string())?
-        .insert(
-            "last_refresh".to_string(),
-            serde_json::Value::String(last_refresh.clone()),
-        );
-
-    let updated_auth_json = serde_json::to_string_pretty(&auth_value).map_err(|e| e.to_string())?;
-    Ok((updated_auth_json, last_refresh))
 }
 
 async fn fetch_wham_account_metadata(
@@ -1810,67 +1673,6 @@ async fn get_wham_account_metadata(
 
     let auth_json = read_account_auth(account_id)?;
     fetch_wham_account_metadata(&auth_json, proxy_enabled, proxy_url).await
-}
-
-#[tauri::command]
-async fn refresh_account_token(
-    account_id: String,
-    proxy_enabled: Option<bool>,
-    proxy_url: Option<String>,
-) -> Result<RefreshAccountTokenResult, String> {
-    if account_id.trim().is_empty() {
-        return Err("Missing account id".to_string());
-    }
-
-    let updated_current_auth = is_active_stored_account(&account_id);
-    let auth_json = if updated_current_auth {
-        match read_codex_auth() {
-            Ok(value) => value,
-            Err(_) => read_account_auth(account_id.clone())?,
-        }
-    } else {
-        read_account_auth(account_id.clone())?
-    };
-    if auth_json.trim().is_empty() {
-        return Err("Account auth not found".to_string());
-    }
-
-    let refresh_token = extract_refresh_token(&auth_json)?;
-    let client = build_http_client(proxy_enabled, proxy_url)?;
-    let refresh_request = TokenRefreshRequest {
-        client_id: CODEX_OAUTH_CLIENT_ID,
-        grant_type: "refresh_token",
-        refresh_token,
-    };
-
-    let response = client
-        .post(CHATGPT_TOKEN_REFRESH_URL)
-        .header("Content-Type", "application/json")
-        .json(&refresh_request)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let status = response.status();
-    let body = response.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(token_refresh_error_message(status, &body));
-    }
-
-    let refresh_response: TokenRefreshResponse =
-        serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    let (updated_auth_json, last_refresh) = apply_refreshed_tokens(&auth_json, refresh_response)?;
-    save_account_auth(account_id.clone(), updated_auth_json.clone())?;
-
-    if updated_current_auth {
-        write_codex_auth(updated_auth_json)?;
-    }
-
-    Ok(RefreshAccountTokenResult {
-        refreshed: true,
-        updated_current_auth,
-        last_refresh,
-    })
 }
 
 // ==================== 用量解析相关结构 ====================
@@ -2423,7 +2225,7 @@ fn bind_session_file_to_account(account_id: &str, file_path: &PathBuf) -> Result
 }
 
 fn bind_session_file_to_current_auth(file_path: &PathBuf) -> Result<(), String> {
-    let account_id = get_active_stored_account_id().or_else(|_| get_current_auth_account_id())?;
+    let account_id = get_current_auth_account_id()?;
     bind_session_file_to_account(&account_id, file_path)
 }
 
@@ -2501,7 +2303,7 @@ async fn get_codex_wham_usage(
                 })
             }
         };
-    let is_current_account = is_active_stored_account(&account_id);
+    let is_current_account = is_current_chatgpt_account(&chatgpt_account_id);
 
     let client = match build_http_client(proxy_enabled, proxy_url) {
         Ok(client) => client,
@@ -2838,7 +2640,6 @@ pub fn run() {
             get_home_dir,
             restart_codex_processes,
             get_wham_account_metadata,
-            refresh_account_token,
             get_codex_wham_usage,
             get_usage_from_sessions,
             get_bound_usage,
