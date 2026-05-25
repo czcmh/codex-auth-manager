@@ -562,12 +562,16 @@ export async function refreshAccountsWorkspaceMetadata(config: AppConfig): Promi
       try {
         const authConfig = await loadAccountAuth(account.id);
         const parsedAccountInfo = parseAccountInfo(authConfig);
-        baseAccountInfo = {
-          ...account.accountInfo,
-          ...parsedAccountInfo,
-          accountStructure: account.accountInfo.accountStructure,
-          workspaceName: account.accountInfo.workspaceName,
-        };
+        const parsedIdentity = buildIdentityFromAccountInfo(parsedAccountInfo);
+        const existingIdentity = buildIdentityFromAccountInfo(account.accountInfo);
+        if (getMatchRank(existingIdentity, parsedIdentity) >= 2) {
+          baseAccountInfo = {
+            ...account.accountInfo,
+            ...parsedAccountInfo,
+            accountStructure: account.accountInfo.accountStructure,
+            workspaceName: account.accountInfo.workspaceName,
+          };
+        }
       } catch (error) {
         console.log(`Failed to reload account info from auth for account ${account.id}:`, error);
       }

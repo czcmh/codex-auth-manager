@@ -239,10 +239,25 @@ fn persist_current_auth_to_matching_account() -> Result<(), String> {
     };
 
     let store = load_accounts_store_data()?;
-    if let Some(account) = store.accounts.iter().find(|account| {
+    if let Some(active_account) = store.accounts.iter().find(|account| account.is_active) {
+        if active_account.account_info.account_id.as_deref()
+            == Some(current_chatgpt_account_id.as_str())
+        {
+            save_account_auth(active_account.id.clone(), current_auth_json)?;
+            return Ok(());
+        }
+    }
+
+    let mut matching_accounts = store.accounts.iter().filter(|account| {
         account.account_info.account_id.as_deref() == Some(current_chatgpt_account_id.as_str())
-    }) {
-        save_account_auth(account.id.clone(), current_auth_json)?;
+    });
+    let first_match = matching_accounts.next();
+    let has_multiple_matches = matching_accounts.next().is_some();
+
+    if let Some(account) = first_match {
+        if !has_multiple_matches {
+            save_account_auth(account.id.clone(), current_auth_json)?;
+        }
     }
 
     Ok(())

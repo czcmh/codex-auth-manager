@@ -26,7 +26,7 @@ import {
   type LimitFilterValue,
   type PlanFilterValue,
 } from './types/accountFilters';
-import { getAccountExpiryBucket, getSubscriptionExpirationState } from './utils/accountStatus';
+import { getAccountExpiryBucket } from './utils/accountStatus';
 import { syncCodexProxyEnv } from './utils/codexEnv';
 import {
   exportAccountsBackup,
@@ -774,17 +774,6 @@ function App() {
   };
 
   const handleSwitchAccount = async (account: StoredAccount) => {
-    const isSubscriptionExpired =
-      getSubscriptionExpirationState(account.accountInfo.subscriptionActiveUntil) === 'expired';
-
-    if (isSubscriptionExpired) {
-      const synced = await syncCurrentCodexAccount();
-      if (synced) {
-        showToast('\u76ee\u6807\u8d26\u53f7\u5df2\u8fc7\u671f\uff0c\u5df2\u540c\u6b65\u5f53\u524d Codex \u767b\u5f55\u8d26\u53f7', 'warning');
-      }
-      return;
-    }
-
     if (config.autoRestartCodexOnSwitch && !config.skipSwitchRestartConfirm) {
       setSwitchRestartConfirm({
         isOpen: true,
