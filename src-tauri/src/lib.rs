@@ -1586,6 +1586,11 @@ struct WhamAccountMetadata {
     plan_type: Option<String>,
 }
 
+struct TokenRefreshCandidate {
+    label: &'static str,
+    auth_json: String,
+}
+
 fn build_http_client(
     proxy_enabled: Option<bool>,
     proxy_url: Option<String>,
@@ -1649,15 +1654,48 @@ fn extract_refresh_token(auth_json: &str) -> Result<String, String> {
 }
 
 fn token_refresh_error_message(status: reqwest::StatusCode, body: &str) -> String {
-    let parsed_message = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
+    let parsed_value = serde_json::from_str::<serde_json::Value>(body).ok();
+    let parsed_message = parsed_value.as_ref().and_then(|value| {
+        value
+            .get("error")
+            .and_then(|error| match error {
+                serde_json::Value::Object(map) => map
+                    .get("message")
+                    .or_else(|| map.get("error_description"))
+                    .or_else(|| map.get("code"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                serde_json::Value::String(message) => Some(message.clone()),
+                _ => None,
+            })
+            .or_else(|| {
+                value
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                value
+                    .get("error_description")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                value
+                    .get("code")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+    });
+    let parsed_code = parsed_value
+        .as_ref()
         .and_then(|value| {
             value
                 .get("error")
                 .and_then(|error| match error {
                     serde_json::Value::Object(map) => map
-                        .get("message")
-                        .or_else(|| map.get("code"))
+                        .get("code")
+                        .or_else(|| map.get("type"))
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string),
                     serde_json::Value::String(message) => Some(message.clone()),
@@ -1665,23 +1703,37 @@ fn token_refresh_error_message(status: reqwest::StatusCode, body: &str) -> Strin
                 })
                 .or_else(|| {
                     value
-                        .get("message")
+                        .get("code")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
                 })
                 .or_else(|| {
                     value
-                        .get("code")
+                        .get("error")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
                 })
-        });
+        })
+        .map(|value| value.to_ascii_lowercase());
+    let permanent_hint = match parsed_code.as_deref() {
+        Some("refresh_token_expired")
+        | Some("refresh_token_reused")
+        | Some("refresh_token_invalidated") => {
+            Some("该 refresh token 已失效，需要重新登录 Codex 后再同步账号。")
+        }
+        _ => None,
+    };
 
-    match parsed_message {
+    let base_message = match parsed_message {
         Some(message) if !message.trim().is_empty() => {
             format!("刷新登录令牌失败: {} {}", status, message)
         }
         _ => format!("刷新登录令牌失败: {}", status),
+    };
+
+    match permanent_hint {
+        Some(hint) => format!("{}。{}", base_message, hint),
+        None => base_message,
     }
 }
 
@@ -1740,6 +1792,75 @@ fn apply_refreshed_tokens(
 
     let updated_auth_json = serde_json::to_string_pretty(&auth_value).map_err(|e| e.to_string())?;
     Ok((updated_auth_json, last_refresh))
+}
+
+async fn refresh_tokens_from_auth_json(
+    auth_json: &str,
+    client: &Client,
+) -> Result<(String, String), String> {
+    let refresh_token = extract_refresh_token(auth_json)?;
+    let refresh_request = TokenRefreshRequest {
+        client_id: CODEX_OAUTH_CLIENT_ID,
+        grant_type: "refresh_token",
+        refresh_token,
+    };
+
+    let response = client
+        .post(CHATGPT_TOKEN_REFRESH_URL)
+        .header("Content-Type", "application/json")
+        .json(&refresh_request)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(token_refresh_error_message(status, &body));
+    }
+
+    let refresh_response: TokenRefreshResponse =
+        serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    apply_refreshed_tokens(auth_json, refresh_response)
+}
+
+fn build_refresh_candidates(
+    account_id: &str,
+    include_current_auth: bool,
+) -> Result<Vec<TokenRefreshCandidate>, String> {
+    let account_auth_json = read_account_auth(account_id.to_string())?;
+    let mut candidates = vec![TokenRefreshCandidate {
+        label: "账号备份",
+        auth_json: account_auth_json.clone(),
+    }];
+
+    if include_current_auth {
+        if let Ok(current_auth_json) = read_codex_auth() {
+            if current_auth_json.trim() != account_auth_json.trim() {
+                candidates.push(TokenRefreshCandidate {
+                    label: "当前 Codex 登录",
+                    auth_json: current_auth_json,
+                });
+            }
+        }
+    }
+
+    Ok(candidates)
+}
+
+fn combine_refresh_errors(errors: Vec<String>) -> String {
+    if errors.is_empty() {
+        return "刷新登录令牌失败".to_string();
+    }
+
+    let mut unique_errors: Vec<String> = Vec::new();
+    for error in errors {
+        if !unique_errors.iter().any(|value| value == &error) {
+            unique_errors.push(error);
+        }
+    }
+
+    unique_errors.join("；")
 }
 
 async fn fetch_wham_account_metadata(
@@ -1823,43 +1944,28 @@ async fn refresh_account_token(
     }
 
     let updated_current_auth = is_active_stored_account(&account_id);
-    let auth_json = if updated_current_auth {
-        match read_codex_auth() {
-            Ok(value) => value,
-            Err(_) => read_account_auth(account_id.clone())?,
-        }
-    } else {
-        read_account_auth(account_id.clone())?
-    };
-    if auth_json.trim().is_empty() {
-        return Err("Account auth not found".to_string());
-    }
-
-    let refresh_token = extract_refresh_token(&auth_json)?;
+    let candidates = build_refresh_candidates(&account_id, updated_current_auth)?;
     let client = build_http_client(proxy_enabled, proxy_url)?;
-    let refresh_request = TokenRefreshRequest {
-        client_id: CODEX_OAUTH_CLIENT_ID,
-        grant_type: "refresh_token",
-        refresh_token,
-    };
 
-    let response = client
-        .post(CHATGPT_TOKEN_REFRESH_URL)
-        .header("Content-Type", "application/json")
-        .json(&refresh_request)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut errors = Vec::new();
+    let mut refreshed_auth: Option<(String, String)> = None;
 
-    let status = response.status();
-    let body = response.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(token_refresh_error_message(status, &body));
+    for candidate in candidates {
+        match refresh_tokens_from_auth_json(&candidate.auth_json, &client).await {
+            Ok(result) => {
+                refreshed_auth = Some(result);
+                break;
+            }
+            Err(error) => {
+                errors.push(format!("{}: {}", candidate.label, error));
+            }
+        }
     }
 
-    let refresh_response: TokenRefreshResponse =
-        serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    let (updated_auth_json, last_refresh) = apply_refreshed_tokens(&auth_json, refresh_response)?;
+    let Some((updated_auth_json, last_refresh)) = refreshed_auth else {
+        return Err(combine_refresh_errors(errors));
+    };
+
     save_account_auth(account_id.clone(), updated_auth_json.clone())?;
 
     if updated_current_auth {
