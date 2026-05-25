@@ -8,8 +8,11 @@ interface AccountCardProps {
   onSwitch: () => void;
   onDelete: () => void;
   onRefresh: () => void | Promise<void>;
+  onRefreshToken: () => void | Promise<void>;
   isRefreshing?: boolean;
   isRefreshingSelf?: boolean;
+  isRefreshingToken?: boolean;
+  isRefreshingTokenSelf?: boolean;
 }
 
 const planTypeColors: Record<string, string> = {
@@ -92,8 +95,11 @@ export const AccountCard: React.FC<AccountCardProps> = ({
   onSwitch,
   onDelete,
   onRefresh,
+  onRefreshToken,
   isRefreshing = false,
   isRefreshingSelf = false,
+  isRefreshingToken = false,
+  isRefreshingTokenSelf = false,
 }) => {
   const { accountInfo, usageInfo, isActive } = account;
   const displayName = resolveCardTitle(account);
@@ -210,6 +216,22 @@ export const AccountCard: React.FC<AccountCardProps> = ({
               viewBox="0 0 24 24"
             >
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+          <button
+            onClick={onRefreshToken}
+            disabled={isRefreshingToken}
+            className="h-8 w-8 rounded-full border border-[var(--dash-border)] text-[var(--dash-text-secondary)] hover:text-emerald-600 hover:border-emerald-200 transition-colors flex items-center justify-center disabled:opacity-50 disabled:pointer-events-none"
+            title="刷新登录令牌"
+          >
+            <svg
+              className={`w-4 h-4 ${isRefreshingTokenSelf ? 'animate-spin' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 11-4 0 2 2 0 014 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.5 8.5L21 16v4h-4l-1.5-1.5H13v-2.5h-2.5L8.5 14" />
             </svg>
           </button>
           <button

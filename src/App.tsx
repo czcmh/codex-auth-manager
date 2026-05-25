@@ -32,6 +32,7 @@ import {
   exportAccountsBackup,
   importAccountsBackup,
   isMissingIdentityError,
+  refreshAccountToken,
   type AddAccountOptions,
 } from './utils/storage';
 
@@ -115,6 +116,7 @@ function App() {
   const ignoreCloseRequestUntilRef = useRef(0);
   const closeBehaviorRef = useRef<AppConfig['closeBehavior']>(config.closeBehavior);
   const [refreshingAccountId, setRefreshingAccountId] = useState<string | 'all' | null>(null);
+  const [refreshingTokenAccountId, setRefreshingTokenAccountId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{
     isOpen: boolean;
     accountId: string | null;
@@ -656,6 +658,30 @@ function App() {
     }
   };
 
+  const handleRefreshToken = async (accountId: string) => {
+    if (refreshingTokenAccountId) return;
+    setRefreshingTokenAccountId(accountId);
+    try {
+      const result = await refreshAccountToken(accountId, config);
+      await loadAccounts();
+      const usageResult = await refreshSingleAccount(accountId);
+
+      if (result.updatedCurrentAuth) {
+        await syncCurrentAccount();
+      }
+
+      if (usageResult.status === 'success') {
+        showToast('登录令牌已刷新，用量已更新', 'success');
+      } else {
+        showToast('登录令牌已刷新，用量稍后重试', 'warning');
+      }
+    } catch (currentError) {
+      setError(currentError instanceof Error ? currentError.message : '刷新登录令牌失败');
+    } finally {
+      setRefreshingTokenAccountId(null);
+    }
+  };
+
   const handleSyncCodexProxyEnv = async () => {
     if (isSyncingCodexProxyEnv) return;
 
@@ -960,10 +986,13 @@ function App() {
                           accountName: account.alias,
                         })}
                         onRefresh={() => handleRefresh(account.id)}
+                        onRefreshToken={() => handleRefreshToken(account.id)}
                         isRefreshing={isRefreshing}
                         isRefreshingSelf={
                           isRefreshing && (refreshingAccountId === account.id || refreshingAccountId === 'all')
                         }
+                        isRefreshingToken={!!refreshingTokenAccountId}
+                        isRefreshingTokenSelf={refreshingTokenAccountId === account.id}
                       />
                     </div>
                   ))}
