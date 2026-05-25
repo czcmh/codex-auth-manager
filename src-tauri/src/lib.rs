@@ -2463,7 +2463,7 @@ async fn get_codex_wham_usage(
         });
     }
 
-    let auth_json = read_account_auth(account_id.clone())?;
+    let auth_json = read_account_auth(account_id)?;
     let auth: AuthConfig = serde_json::from_str(&auth_json).map_err(|e| e.to_string())?;
     let tokens = match auth.tokens {
         Some(tokens) => tokens,
