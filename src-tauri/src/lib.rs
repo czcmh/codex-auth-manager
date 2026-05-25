@@ -1808,7 +1808,7 @@ async fn get_wham_account_metadata(
         return Ok(None);
     }
 
-    let auth_json = read_account_auth(account_id)?;
+    let auth_json = read_account_auth(account_id.clone())?;
     fetch_wham_account_metadata(&auth_json, proxy_enabled, proxy_url).await
 }
 
