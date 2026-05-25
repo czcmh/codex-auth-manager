@@ -676,13 +676,7 @@ function App() {
         showToast('登录令牌已刷新，用量稍后重试', 'warning');
       }
     } catch (currentError) {
-      setError(
-        currentError instanceof Error
-          ? currentError.message
-          : typeof currentError === 'string'
-            ? currentError
-            : '刷新登录令牌失败'
-      );
+      setError(currentError instanceof Error ? currentError.message : '刷新登录令牌失败');
     } finally {
       setRefreshingTokenAccountId(null);
     }
